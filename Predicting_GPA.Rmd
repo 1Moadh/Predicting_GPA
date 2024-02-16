@@ -1,5 +1,5 @@
 ---
-title: "MidTerm Project"
+title: "PREDICTING THE ACADEMIC STANDING OF STUDENTS BASED ON PHONE SCREEN TIME AND OTHER PREDICTORS"
 author: "Group 2"
 date: "2023-10-16"
 output:
