@@ -1,2 +1,2 @@
 # Predicting_GPA
-PREDICTING THE ACADEMIC STANDING OF STUDENTS BASED ON PHONE SCREEN TIME AND OTHER PREDICTORS
+This is a group project, me and two teammates. It was done in Fall 2023.
