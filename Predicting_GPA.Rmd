@@ -1,0 +1,368 @@
+---
+title: "MidTerm Project"
+author: "Group 2"
+date: "2023-10-16"
+output:
+  html_document: default
+  pdf_document: default
+  word_document: default
+---
+```{r, setup=FALSE}
+library(tidyverse)
+library(caret)
+library(stringr)
+library(ISLR) 
+library(MASS) 
+library(corrplot)
+library(polycor)
+library(readxl)
+library(class)
+library(ROSE)
+library(smotefamily)
+library(e1071)
+library(C50)
+library(nnet)
+library(randomForest)
+library(gridExtra)
+library(AER)
+library(fastDummies)
+```
+# Data parsing and import
+```{r, echo= FALSE}
+sspdata <- read_excel("mid-project.xlsx")
+```
+### Description:
+ ---> Descripe our data
+### Usage:
+---> we will call our cleaned data "ssp"
+---> we will call our data with dummy variables representing multiclass variables with "sspdummy"
+
+### Varaibles:
+
+`Timestamp`:what time was the response submitted
+`age`: What is your age?
+`gender`: Gender?
+`level`: Academic Level?
+`wd`: When do you use your phone more?
+`edu`: How often do you use your phone for educational purposes (e.g., online classes, research, educational apps)?
+`ent`: On average, how many hours do you use your phone for entertainment purposes per day? 
+`hwd`: How many hours do you typically spend on your phone per day during weekdays?
+`apps`: Which app(s) do you mostly use?
+`napps`: Number of apps do you use?
+`hsleep`: How many hours do you sleep per night on average? (per day)
+`pbed`: Do you use your phone before bedtime?
+`CGPA`: What is your CGPA?
+`standing`: What is your standin? (eg. Excellent, Very_Good, Good, Satisfactory, Not_Satisfactory)
+`hwdays`: On average, how many hours do you spend studying on weekdays?  (per day)
+`belief`: Do you believe that your screen-time affects your academic performance?
+```{r}
+# In this code chunk, we rename the columns of the "sspdata" data frame for better clarity and understanding.
+# We also calculate the number of apps and create a new column "napps."
+colnames(sspdata) <- c("Timestamp", "age", "gender","level", "wd", "edu", "ent", "hwd","apps", "hsleep", "pbed", "CGPA", "hwdays", "belief")
+
+sspdata$napps <- str_count(sspdata$apps, ",") + 1
+
+# We then create a new data frame "ssp" by filtering and transforming the data.
+# We filter out specific rows based on conditions and create a new variable "standing" based on the "CGPA" column.
+ssp <- sspdata %>% 
+    filter(CGPA>0, age<=25, hsleep>4)%>%
+    mutate(standing = case_when(
+    CGPA > 3.7 ~ "Excellent",
+    CGPA >= 3.3 ~ "Very_Good",
+    CGPA >= 2.7 ~ "Good",
+    CGPA >= 2 ~ "Satisfactory",
+    CGPA < 2 ~ "Not_Satisfactory",
+    CGPA < 1 ~ "Poor"))%>%
+    dplyr:: select(-Timestamp, -apps, -CGPA)
+# Divide numbers greater than 10 by 7 days and keep the rest; at first the question wasn't clear, so students were putting numbers for the whole week.
+ssp$hwdays <- ifelse(ssp$hwdays >= 7, ssp$hwdays / 7, ssp$hwdays)
+ssp$ent <- ifelse(ssp$ent >= 7, ssp$ent / 7, ssp$ent)
+
+
+# Next, we factorize the categorical variables in the "ssp" data frame, to use them in our models.
+factor_columns <- c("gender", "level", "wd", "edu", "pbed", "belief")
+ssp[factor_columns] <- lapply(ssp[factor_columns], factor)
+
+# We want to order levels of the variable standing according to grade order.
+desired_order <- c("Excellent", "Very_Good", "Good", "Satisfactory", "Not_Satisfactory")
+
+# Reorder the "standing" variable
+ssp$standing <- factor(ssp$standing, levels = desired_order)
+
+summary(ssp)
+str(ssp)
+
+
+```
+```{r}
+ # Assuming 'data' is your dataset, and 'categorical_var' is the name of the categorical variable
+sspdummy <- dummy_cols(ssp, select_columns = c("level", "wd", "edu"))%>%
+     dplyr:: select(-level,-wd,-edu,-belief)
+
+sspdummy$gender <- ifelse(sspdummy$gender == "Male", 1, 0)
+sspdummy$pbed <- ifelse(sspdummy$pbed == "Yes", 1, 0)
+
+str(sspdummy)
+```
+
+
+## Exploratory Data Analysis (EDA)
+```{r}
+ggplot(ssp, aes(standing, hsleep, fill = gender)) +
+  geom_boxplot() +
+  labs(
+    x = "Standing",
+    y = "Hours of Sleep",
+    title = "Figure 1.1: Relationship Between Standing and Hours of Sleep",
+    fill = "Gender"
+  )
+
+
+ggplot(ssp, aes(standing, hwdays, fill = gender)) +
+  geom_boxplot() +
+  labs(
+    x = "Standing",
+    y = "Hours of Work per Day",
+    title = "Figure 1.2: Relationship Between Standing and Hours of Work per Day",
+    fill = "Gender"
+  )
+
+```
+## Variation Plots for our variables
+```{r}
+# Define a vector of colors for pie chart segments
+#my_colors <- c("", "red", "green", "orange", "purple")
+
+# Create a function to generate pie charts with percentages
+pie_chart <- function(data, variable, title, figure_label) {
+  data %>%
+    group_by(!!sym(variable)) %>%
+    summarize(count = n()) %>%
+    ggplot(aes(x = "", y = count, fill = !!sym(variable))) +
+    geom_bar(stat = "identity") +
+    geom_text(aes(label = scales::percent(count/sum(count))), position = position_stack(vjust = 0.5), size = 3) +
+    coord_polar(theta = "y") +
+    labs( title = title, x= figure_label, fill = variable) +
+#    scale_fill_manual(values = my_colors) +
+    theme_void()+
+        theme(
+      plot.title = element_text(size = 10),  # Adjust the title text size
+      axis.title.x = element_text(size = 0),  # Adjust the x-axis label text size
+      axis.title.y = element_text(size = 7)   # Adjust the y-axis label text size
+    )
+}
+
+# Create pie charts for these variables and save them to be used in the next chunk.
+gender_pie <- pie_chart(ssp, "gender", "Gender Distribution", "Fig [2.1]")
+level_pie <- pie_chart(ssp, "level", "Academic Level Distribution", "Fig [2.2]")
+belief_pie <- pie_chart(ssp, "belief", "Does screen time affect grades?", "Fig [2.3]")
+pbed_pie <- pie_chart(ssp, "pbed", "Phone before bedtime?", "Fig [2.4]")
+wd_pie <- pie_chart(ssp, "wd", "When do you use your phone more?", "Fig [2.5]")
+edu_pie <- pie_chart(ssp, "edu", "How often you use your phone for educational purposes?", "Fig [2.6]")
+
+
+# Create a function to generate bar charts with numbers
+den_chart <- function(data, variable, title, x_labels, figure_label) {
+  data %>%
+    ggplot(aes(x = !!sym(variable)))+
+    geom_density() +
+    labs(title = title, x = x_labels, y = figure_label)  +
+    theme_minimal()+
+            theme(
+      plot.title = element_text(size = 10),  # Adjust the title text size
+      axis.title.x = element_text(size = 7),  # Adjust the x-axis label text size
+      axis.title.y = element_text(size = 7)   # Adjust the y-axis label text size
+    )
+}
+# Create bar charts with custom x-axis labels
+den_age <- den_chart(ssp, "age", "Age Distribution", "Age", "Fig [3.1]")
+den_hwd <- den_chart(ssp, "hwd", "Time spent on phone on weekdays", "Hours per Day", "Fig [3.2]")
+den_ent <- den_chart(ssp, "ent", "Phone used for entertainment", "Hours per Day", "Fig [3.3]")
+den_napps <- den_chart(ssp, "napps", "How many apps do you use?", "Number of Apps", "Fig [3.4]")
+den_hsleep <- den_chart(ssp, "hsleep", "Sleep per night", "Hours per Night", "Fig [3.5]")
+den_hwdays <- den_chart(ssp, "hwdays", "Hours spent studying", "Hours per Day", "Fig [3.6]")
+```
+
+```{r}
+grid.arrange(gender_pie, level_pie, belief_pie,pbed_pie)
+grid.arrange(wd_pie, edu_pie)
+grid.arrange(den_age, den_hwd, den_ent, den_napps, den_hsleep, den_hwdays)
+```
+
+```{r}
+# Count the frequency of each class
+class_freq <- table(ssp$standing)  # Replace "ssp" with your actual dataset name
+
+# Create a bar plot
+ggplot(data = data.frame(Class = names(class_freq), Frequency = as.numeric(class_freq)), aes(x = Class, y = Frequency)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Class Distribution", x = "Class", y = "Frequency")
+```
+
+
+#Correlation plot
+```{r}
+# We want to check for multicollinearity
+
+sspnumeric <- ssp
+numeric_columns <- c("gender", "level", "edu", "pbed", "belief", "wd", "standing")
+sspnumeric[numeric_columns] <- lapply(ssp[numeric_columns], as.numeric)
+corrplot(cor(sspnumeric),
+  method = "color",
+  type = "upper" )
+str(sspnumeric)
+```
+# Use 80% of "ssp" as training set and remaining 20% as testing set
+
+```{r}
+# Set the random seed for reproducibility
+set.seed(123)
+# Split the dataset into training and testing sets (80% training, 20% testing)
+ssp_obs<-nrow(sspdummy)
+train.set <- sample(ssp_obs,size=trunc(0.8*ssp_obs))
+train<-sspdummy[train.set,]
+test<-sspdummy[-train.set,]
+
+train
+```
+
+```{r}
+# Scale the numeric variables in your dataset
+scaled_data <- sspdummy
+numeric_columns <- c("hwdays","hsleep","ent","hwd","napps")
+scaled_data[, numeric_columns] <- scale(scaled_data[, numeric_columns])
+
+# Split the scaled dataset into a training and testing set (if not already done)
+set.seed(123)  # for reproducibility
+ssp_obs_scaled<-nrow(scaled_data)
+train_indices <- sample(ssp_obs_scaled,size=trunc(0.8*ssp_obs_scaled))
+train_normal <- scaled_data[train_indices, ]
+test_normal <- scaled_data[-train_indices, ]
+
+str(train_normal)
+
+```
+```{r}
+# Count the frequency of each class
+class_freq <- table(train$standing)  # Replace "ssp" with your actual dataset name
+
+# Create a bar plot
+ggplot(data = data.frame(Class = names(class_freq), Frequency = as.numeric(class_freq)), aes(x = Class, y = Frequency)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Class Distribution", x = "Class", y = "Frequency")
+```
+
+```{r}
+# Count the frequency of each class
+class_freq <- table(test$standing)  # Replace "ssp" with your actual dataset name
+# Create a bar plot
+ggplot(data = data.frame(Class = names(class_freq), Frequency = as.numeric(class_freq)), aes(x = Class, y = Frequency)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Class Distribution", x = "Class", y = "Frequency")
+
+```
+
+# Multinomial
+```{r}
+# Train the Multinomial model
+model_Multinomial <- multinom(standing ~ edu_Daily+edu_Weekly+age+hwd,data=train_normal)
+# Make predictions on the test dataset
+predicted_Multinomial <- predict(model_Multinomial, newdata = test_normal)
+# Use the predicted object from your Multinomial model
+predicted.classes_Multinomial <- as.factor(predicted_Multinomial)
+
+# Calculate the confusion matrix
+ConfusionMatrix_Multinomial <- confusionMatrix(predicted.classes_Multinomial, test_normal$standing)
+ConfusionMatrix_Multinomial
+
+coeftest(model_Multinomial)
+```
+# LDA
+```{r}
+# LDA Model Training
+# This section trains an LDA (Linear Discriminant Analysis) model to predict the "standing" variable.
+model <- lda(standing~ edu_Daily+age+hwd+ent+hsleep+hwdays, data=train_normal)
+predicted <- predict(model, test_normal)
+summary(predicted)
+
+# Model Summary and Confusion Matrix
+# This section provides a summary of the LDA model and calculates a confusion matrix for evaluation.
+# Display a summary of the LDA model
+summary(model)
+# Use the predicted object from your LDA model
+predicted.classes <- predicted$class
+summary(predicted)
+# Compute the confusion matrix
+ConfusionMatrix <- confusionMatrix(predicted.classes, test_normal$standing)
+ConfusionMatrix
+```
+# KNN
+```{r}
+set.seed(123)
+knntrain <- train_normal
+knntest <- test_normal
+str(knntrain)
+train_scaled <- (knntrain[-9])
+test_scaled <-  (knntest[-9])
+# Train the k-NN model
+knn_model <- knn(train = train_scaled, test = test_scaled, cl = train_normal$standing, k = 70)
+actual<-test$standing
+cm<-table(actual,knn_model)
+confusionMatrix(cm)
+
+```
+# Naive Bayes
+```{r}
+# Naive Bayes Model Training
+# This section trains a Naive Bayes model to predict the "standing" variable.
+
+model_NB <- naiveBayes(standing ~ edu_Daily+age+hsleep+hwdays+pbed+level_Freshman+level_Junior,data=train)
+predicted_NB <- predict(model_NB, test)
+
+# Use the predicted object from the Naive Bayes model
+predicted.classes_NB <- predicted_NB
+# Compute the confusion matrix
+ConfusionMatrix_NB <- confusionMatrix(predicted.classes_NB, test$standing)
+ConfusionMatrix_NB
+```
+# CVM
+```{r}
+# Train the CVM model
+#formula <- as.formula(paste("standing ~ . - standing"))  # Exclude the "standing" column
+model_CVM <- C5.0(standing ~ 	hwd+age+edu_Daily+level_Sophomore+gender+ent+edu_Never+wd_Weekdays+edu_Monthly,data=train_normal)
+
+# edu_Daily+edu_Monthly+edu_Never+age+hwd+level_Sophomore+wd_Weekdays+gender+ent+hwdays
+# Make predictions on the test dataset
+predicted_CVM <- predict(model_CVM, newdata = test_normal)
+
+# Model Summary and Confusion Matrix
+# Display a summary of the CVM model
+summary(model_CVM)
+# Use the predicted object from your CVM model
+predicted.classes_CVM <- as.factor(predicted_CVM)
+# Calculate the confusion matrix
+ConfusionMatrix_CVM <- confusionMatrix(predicted.classes_CVM, test_normal$standing)
+ConfusionMatrix_CVM
+
+```
+# Random Forest
+```{r}
+set.seed(123)
+# Train the Random Forest model
+model_RandomForest <- randomForest(standing ~.,data=train_normal, ntree = 2000)
+
+# Make predictions on the test dataset
+predicted_RandomForest <- predict(model_RandomForest, newdata = test_normal)
+
+# Model Summary and Confusion Matrix
+# Display a summary of the Random Forest model
+print(model_RandomForest)
+
+# Use the predicted object from your Random Forest model
+predicted.classes_RandomForest <- as.factor(predicted_RandomForest)
+
+# Calculate the confusion matrix
+ConfusionMatrix_RandomForest <- confusionMatrix(predicted.classes_RandomForest, test_normal$standing)
+ConfusionMatrix_RandomForest
+
+```
